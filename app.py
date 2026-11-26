@@ -10,7 +10,7 @@ import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PROFILE = "agent-harness-2026-09"
-VERSION = "rules-v1"
+VERSION = "rules-v1-dump"
 
 
 # ----------------------------------------------------------------- helpers
@@ -434,6 +434,9 @@ def classify_case(case):
 
 
 # ------------------------------------------------------------------ server
+STORE = {}  # caseId -> {"case":..., "pred":...}  (for offline tuning via GET /dump)
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code, obj):
         b = json.dumps(obj).encode()
@@ -444,7 +447,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(b)
 
     def do_GET(self):
-        self._send(200, {"profile": PROFILE, "status": "ok", "classifier": VERSION})
+        if self.path.startswith("/dump"):
+            self._send(200, {"count": len(STORE), "items": list(STORE.values())})
+            return
+        self._send(200, {"profile": PROFILE, "status": "ok", "classifier": VERSION, "stored": len(STORE)})
 
     def do_POST(self):
         try:
@@ -453,7 +459,16 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self._send(400, {"error": "invalid json"})
             return
-        results = [classify_case(c) for c in (data.get("cases") or []) if isinstance(c, dict)]
+        results = []
+        for c in (data.get("cases") or []):
+            if not isinstance(c, dict):
+                continue
+            r = classify_case(c)
+            results.append(r)
+            try:
+                STORE[str(c.get("caseId"))] = {"case": c, "pred": r}
+            except Exception:
+                pass
         self._send(200, {"profile": data.get("profile") or PROFILE,
                          "batchId": data.get("batchId"), "results": results})
 
